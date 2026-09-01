@@ -109,6 +109,11 @@ router.post("/google", async (req, res) => {
   try {
     decodedToken = await firebaseAuth.verifyIdToken(idToken);
   } catch (error) {
+    console.error(
+      "Firebase verify error:",
+      error.code || "none",
+      error.message
+    );
     return res.status(401).json({ message: "Invalid Google authentication token" });
   }
 
