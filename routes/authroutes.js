@@ -14,6 +14,23 @@ const findUserByEmail = (email) =>
     email: new RegExp(`^${escapeRegExp(email)}$`, "i"),
   });
 
+const logGoogleAuthError = (stage, error, sensitiveValues = []) => {
+  const safeMessage = sensitiveValues.reduce(
+    (message, value) =>
+      typeof value === "string" && value
+        ? message.split(value).join("[redacted]")
+        : message,
+    error?.message || "No error message"
+  );
+
+  console.error(
+    "Google auth error:",
+    stage,
+    error?.code || error?.name || "none",
+    safeMessage
+  );
+};
+
 const createAppToken = (userId) =>
   jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "1d" });
 
@@ -109,11 +126,7 @@ router.post("/google", async (req, res) => {
   try {
     decodedToken = await firebaseAuth.verifyIdToken(idToken);
   } catch (error) {
-    console.error(
-      "Firebase verify error:",
-      error.code || "none",
-      error.message
-    );
+    logGoogleAuthError("firebase_verify", error, [idToken]);
     return res.status(401).json({ message: "Invalid Google authentication token" });
   }
 
@@ -131,6 +144,8 @@ router.post("/google", async (req, res) => {
     return res.status(401).json({ message: "A verified Google email is required" });
   }
 
+  let stage = "user_lookup";
+
   try {
     const normalizedEmail = normalizeEmail(email);
     let user = await User.findOne({ firebaseUid: uid });
@@ -146,6 +161,7 @@ router.post("/google", async (req, res) => {
         }
 
         if (!user.firebaseUid) {
+          stage = "user_link";
           const linkResult = await User.updateOne(
             {
               _id: user._id,
@@ -177,6 +193,7 @@ router.post("/google", async (req, res) => {
             ? name.trim()
             : normalizedEmail.split("@")[0];
 
+        stage = "user_create";
         user = await User.create({
           name: verifiedName,
           email: normalizedEmail,
@@ -185,6 +202,7 @@ router.post("/google", async (req, res) => {
       }
     }
 
+    stage = "jwt_sign";
     res.json(buildAuthResponse(user));
   } catch (error) {
     if (error && error.code === 11000) {
@@ -193,6 +211,14 @@ router.post("/google", async (req, res) => {
         .json({ message: "Google account could not be linked" });
     }
 
+    logGoogleAuthError(stage, error, [
+      idToken,
+      uid,
+      email,
+      name,
+      process.env.MONGO_URI,
+      process.env.JWT_SECRET,
+    ]);
     res.status(500).json({ message: "Google login error" });
   }
 });
